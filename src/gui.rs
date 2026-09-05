@@ -96,8 +96,11 @@ pub fn run() -> i32 {
 
     let window = match WindowBuilder::new()
         .with_title("Noob Plugin Manager")
-        .with_inner_size(tao::dpi::LogicalSize::new(760.0, 420.0))
-        .with_min_inner_size(tao::dpi::LogicalSize::new(560.0, 260.0))
+        // Wide enough for the navigation beside two cards, and tall enough
+        // that a plug-in's page shows its picture, its facts and the button
+        // without scrolling.
+        .with_inner_size(tao::dpi::LogicalSize::new(1120.0, 780.0))
+        .with_min_inner_size(tao::dpi::LogicalSize::new(680.0, 420.0))
         .build(&event_loop)
     {
         Ok(w) => w,

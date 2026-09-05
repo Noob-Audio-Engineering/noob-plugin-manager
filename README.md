@@ -54,11 +54,25 @@ publishes it to a rolling `latest` release, with a manifest beside it:
   "commit": "…", "built": "…", "platform": "windows-x86_64",
   "sha256": "…", "url": "…",
   "installs": [ { "kind": "vst3", "path": "noob-resonator.vst3", "into": "vst3" },
-                { "kind": "clap", "path": "noob-resonator.clap", "into": "clap" } ] }
+                { "kind": "clap", "path": "noob-resonator.clap", "into": "clap" } ],
+  "display": { "name": "Noob Resonator", "kind": "effect", "accent": "#4fd6c8",
+               "tagline": "…", "features": ["…"] },
+  "banner": "…/noob-resonator-banner.png" }
 ```
 
 That file is the contract. This program reads it to decide whether it needs the
 download at all, and to know where each part belongs.
+
+`display` and `banner` are how a plug-in presents itself, and both come from
+the plug-in: `display` out of `[package.metadata.noob]` in its own crate
+manifest, `banner` from the photograph its pipeline takes of that build
+running. Neither is written here. An installer holding a description of
+somebody else's work would be a description kept where its author never looks,
+and it would be wrong the first time they changed anything.
+
+Both are optional. A build published before they existed, or a crate that has
+not filled them in, simply shows less --- which is not the same as being
+broken, and is not treated as though it were.
 
 | | VST3 | CLAP |
 |---|---|---|
