@@ -1,0 +1,101 @@
+# Ship `noob` itself for every commit on `main`, to the same rolling `latest`
+# release the plug-ins use --- an installer nobody can install is not one.
+name: Release
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            label: windows-x86_64
+            bin: noob.exe
+          - os: macos-latest
+            label: macos-universal
+            bin: noob
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.96.0"
+      - uses: Swatinem/rust-cache@v2
+
+      - name: macOS cross targets
+        if: matrix.os == 'macos-latest'
+        run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
+
+      - name: Build
+        shell: bash
+        run: |
+          if [ "${{ matrix.os }}" = "macos-latest" ]; then
+            cargo build --release --target aarch64-apple-darwin
+            cargo build --release --target x86_64-apple-darwin
+            # One download for both Apple architectures, like the plug-ins.
+            lipo -create -output noob \
+              target/aarch64-apple-darwin/release/noob \
+              target/x86_64-apple-darwin/release/noob
+            lipo -info noob
+          else
+            cargo build --release
+            cp target/release/noob.exe noob.exe
+          fi
+
+      - name: It runs
+        shell: bash
+        run: ./${{ matrix.bin }} where
+
+      - name: Package
+        shell: bash
+        run: |
+          zip="noob-${{ matrix.label }}.zip"
+          if command -v 7z >/dev/null; then 7z a -tzip -bso0 "$zip" "${{ matrix.bin }}"; else zip -q "$zip" "${{ matrix.bin }}"; fi
+          echo "packaged $zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.label }}
+          path: noob-${{ matrix.label }}.zip
+
+  publish:
+    name: Publish
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Publish
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ver=$(awk -F'"' '/^version = /{print $2; exit}' Cargo.toml)
+          short=${GITHUB_SHA:0:7}
+          ls -la dist
+          case "$GITHUB_REF" in
+            refs/tags/*)
+              tag=${GITHUB_REF#refs/tags/}
+              gh release create "$tag" --title "noob $ver" --notes "Commit $short." || true
+              ;;
+            *)
+              tag=latest
+              gh release delete "$tag" --yes --cleanup-tag 2>/dev/null || true
+              gh release create "$tag" --prerelease --title "noob (main)" \
+                --notes "The newest commit on \`main\`: $short, version $ver. Unzip and run \`noob list\`."
+              ;;
+          esac
+          gh release upload "$tag" dist/* --clobber

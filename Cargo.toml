@@ -1,0 +1,27 @@
+[package]
+name = "noob-plugin-manager"
+version = "0.1.0"
+edition = "2024"
+description = "Installs and updates every Noob Audio Engineering plug-in, from the builds their own repositories publish."
+authors = ["Ely Erin Fox"]
+license = "MIT OR Apache-2.0"
+homepage = "https://github.com/Noob-Audio-Engineering/noob-plugin-manager"
+repository = "https://github.com/Noob-Audio-Engineering/noob-plugin-manager"
+
+[[bin]]
+name = "noob"
+path = "src/main.rs"
+
+[dependencies]
+# `ureq` rather than `reqwest`: this is a command-line tool that makes a
+# handful of requests and exits, so an async runtime would be a dependency
+# with nothing to do.
+ureq = { version = "2.10", features = ["json", "tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+sha2 = "0.10"
+directories = "5"
+
+[profile.release]
+strip = true
