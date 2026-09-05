@@ -86,13 +86,57 @@ fn state_file() -> Option<PathBuf> {
 /// the message rather than silently putting the plug-in somewhere no host
 /// looks.
 pub fn install_dir(into: &str) -> Result<PathBuf, String> {
-    let root = plugin_root()?;
-    match into {
-        "vst3" => Ok(root.join("VST3")),
-        "clap" => Ok(root.join("CLAP")),
-        other => Err(format!(
-            "the manifest asks for a `{other}` directory, which this installer does not know about --- update it"
-        )),
+    let leaf = match into {
+        "vst3" => "VST3",
+        "clap" => "CLAP",
+        other => {
+            return Err(format!(
+                "the manifest asks for a `{other}` directory, which this installer does not know about --- update it"
+            ));
+        }
+    };
+    // The shared directory when it can be written, and the user's own when it
+    // cannot. On this machine the shared VST3 folder is writable and the CLAP
+    // one beside it is not, which is not a difference anybody chose --- so
+    // asking rather than assuming is the only way to get both right.
+    let shared = plugin_root()?.join(leaf);
+    if writable(&shared) {
+        return Ok(shared);
+    }
+    let user = user_root()?.join(leaf);
+    Ok(user)
+}
+
+/// Whether a directory can be created in and written to, asked by doing it
+/// rather than by inspecting permissions --- which on Windows is the only
+/// answer that means anything.
+fn writable(dir: &Path) -> bool {
+    if std::fs::create_dir_all(dir).is_err() {
+        return false;
+    }
+    let probe = dir.join(".noob-write-probe");
+    match std::fs::write(&probe, b"") {
+        Ok(()) => {
+            let _ = std::fs::remove_file(&probe);
+            true
+        }
+        Err(_) => false,
+    }
+}
+
+/// The per-user plug-in directory, which every host also scans and which
+/// needs no administrator.
+fn user_root() -> Result<PathBuf, String> {
+    if cfg!(target_os = "windows") {
+        let local = std::env::var("LOCALAPPDATA")
+            .map_err(|_| "no LOCALAPPDATA on this system".to_string())?;
+        Ok(Path::new(&local).join("Programs").join("Common"))
+    } else if cfg!(target_os = "macos") {
+        // Already the user's own on macOS, so there is nothing to fall back
+        // to and nothing that would need a password.
+        plugin_root()
+    } else {
+        plugin_root()
     }
 }
 

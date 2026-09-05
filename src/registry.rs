@@ -155,11 +155,52 @@ fn newest(agent: &ureq::Agent, repo: &str) -> Result<Option<Manifest>, String> {
 }
 
 fn get_json<T: serde::de::DeserializeOwned>(agent: &ureq::Agent, url: &str) -> Result<T, String> {
-    agent
-        .get(url)
-        .set("Accept", "application/vnd.github+json")
-        .call()
-        .map_err(|e| e.to_string())?
-        .into_json()
-        .map_err(|e| e.to_string())
+    let mut req = agent.get(url).set("Accept", "application/vnd.github+json");
+    // A token is not required and is used only to raise the rate limit: the
+    // releases this reads are public. `gh auth token` puts one in the
+    // environment on a machine that already has the CLI.
+    if let Some(tok) = token() {
+        req = req.set("Authorization", &format!("Bearer {tok}"));
+    }
+    match req.call() {
+        Ok(r) => r.into_json().map_err(|e| e.to_string()),
+        // A rate limit is the one failure that will actually happen to
+        // somebody, and reported as a plain error it reads as "there are no
+        // plug-ins" --- which is a different and much more alarming claim.
+        Err(ureq::Error::Status(403 | 429, r)) => {
+            let reset = r
+                .header("x-ratelimit-reset")
+                .and_then(|s| s.parse::<u64>().ok());
+            let mins = reset
+                .and_then(|t| {
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .ok()?
+                        .as_secs();
+                    Some(t.saturating_sub(now).div_ceil(60))
+                })
+                .unwrap_or(0);
+            Err(format!(
+                "GitHub is rate-limiting this machine{}.                  Nothing is wrong with the plug-ins or with this program --- it has                  simply asked too often. Set GITHUB_TOKEN (`gh auth token`) to raise                  the limit, or wait.",
+                if mins > 0 {
+                    format!(" for about {mins} more minute(s)")
+                } else {
+                    String::new()
+                }
+            ))
+        }
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+/// A token from the environment, if the machine has one. Never required.
+fn token() -> Option<String> {
+    for k in ["GITHUB_TOKEN", "GH_TOKEN"] {
+        if let Ok(v) = std::env::var(k)
+            && !v.trim().is_empty()
+        {
+            return Some(v);
+        }
+    }
+    None
 }

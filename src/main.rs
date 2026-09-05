@@ -92,9 +92,16 @@ fn cmd_list() -> i32 {
     let st = State::load();
 
     if found.is_empty() {
-        eprintln!("No plug-ins found.");
-        for p in &problems {
-            eprintln!("  {p}");
+        // "No plug-ins found" with the reason underneath reads as a claim
+        // about the plug-ins. When the reason is that nothing could be asked,
+        // say that instead --- it is a different statement.
+        if problems.is_empty() {
+            eprintln!("No plug-ins found.");
+        } else {
+            eprintln!("Could not find out what is published:");
+            for p in &problems {
+                eprintln!("  {p}");
+            }
         }
         return 1;
     }
