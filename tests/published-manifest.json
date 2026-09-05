@@ -1,0 +1,15 @@
+{
+  "schema": 1,
+  "id": "noob-resonator",
+  "version": "0.1.0",
+  "commit": "03d1e9a9bde390069af06750e8cd42a54449ec90",
+  "built": "2026-09-05T18:44:01Z",
+  "platform": "windows-x86_64",
+  "asset": "noob-resonator-windows-x86_64.zip",
+  "sha256": "f9dca066ce5262fe141f4b26c88fa35965c1ccfc2042b5b6d8e9be95d379c716",
+  "url": "https://github.com/Noob-Audio-Engineering/noob-resonator/releases/download/latest/noob-resonator-windows-x86_64.zip",
+  "installs": [
+    { "kind": "vst3", "path": "noob-resonator.vst3", "into": "vst3" },
+    { "kind": "clap", "path": "noob-resonator.clap", "into": "clap" }
+  ]
+}
