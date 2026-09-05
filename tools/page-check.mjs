@@ -121,11 +121,18 @@ const banner = await page.$eval('.banner', (e) => ({
   img: !!e.querySelector('img'),
 }));
 
+// And the settings modal, which is the third thing the window can show.
+await page.evaluate(() => document.querySelector('#opensettings').click());
+await page.waitForTimeout(400);
+const modal = await page.$eval('#veil', (e) => !e.hidden);
+await page.screenshot({ path: out.replace(/\.png$/, '-settings.png') });
+
 await browser.close();
 
 console.log('groups on the home page :', heads.join(' | ') || '(none)');
 console.log('cards / with a picture  :', cards, '/', thumbs);
 console.log('plug-in page banner     :', JSON.stringify(banner));
+console.log('settings modal opens    :', modal);
 if (problems.length) {
   console.error('the page reported problems:');
   for (const p of problems.slice(0, 8)) console.error('  ' + p);
