@@ -40,6 +40,9 @@ fn main() {
         "update" | "upgrade" => cmd_install(rest, true),
         "uninstall" | "remove" => cmd_uninstall(rest),
         "where" => cmd_where(),
+        // Used by `tools/page-check.mjs`, so the interface can be drawn
+        // against the state this program actually sends.
+        "view" => gui::dump(),
         "-h" | "--help" | "help" => {
             help();
             0
@@ -62,6 +65,7 @@ fn help() {
     println!("  noob update [id|all]      only what is behind (default: all)");
     println!("  noob uninstall <id>       remove exactly what an install added");
     println!("  noob where                the directories things go into");
+    println!("  noob view                 print the state the window is drawn from, as JSON");
 }
 
 pub fn agent() -> ureq::Agent {

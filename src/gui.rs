@@ -157,6 +157,31 @@ pub fn run() -> i32 {
     });
 }
 
+/// Print the state the window would be handed, and nothing else.
+///
+/// The page is drawn entirely from this one value, so a check that renders
+/// *this* is checking what the window shows. `tools/page-check.mjs` can write
+/// its own state instead, which is enough to work on the layout offline, but a
+/// state written by hand can never disagree with the program --- and
+/// disagreeing with the program is the only interesting thing a check of a
+/// page can do.
+pub fn dump() -> i32 {
+    let agent = crate::agent();
+    let (found, problems) = registry::discover(&agent);
+    let st = State::load();
+    let v = view(&found, &problems, &st, None);
+    match serde_json::to_string_pretty(&v) {
+        Ok(s) => {
+            println!("{s}");
+            0
+        }
+        Err(e) => {
+            eprintln!("could not serialise the view: {e}");
+            1
+        }
+    }
+}
+
 /// Everything that touches the network or the disk, off the UI thread.
 fn worker(rx: mpsc::Receiver<Cmd>, proxy: tao::event_loop::EventLoopProxy<View>) {
     let agent = crate::agent();
