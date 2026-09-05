@@ -170,12 +170,24 @@ fn copy_tree(from: &Path, to: &Path) -> Result<(), String> {
 /// The message for a file a host is holding open, which is the ordinary way
 /// this fails and deserves to say so rather than reading as corruption.
 fn locked(path: &Path, e: &std::io::Error) -> String {
-    format!(
-        "{} could not be replaced: {e}\n  \
-         A plug-in that is loaded is held open by the host. Close the project \
-         --- or the whole host --- and run this again.",
-        path.display()
-    )
+    use crate::elevate::Denial;
+    match crate::elevate::classify(path) {
+        Denial::Directory => format!(
+            "{} could not be written: {e}\n  \
+             The folder itself refuses writes. Administrator rights would fix \
+             this, or you can install into your own plug-in folders instead.\n  \
+             ELEVATABLE",
+            path.display()
+        ),
+        Denial::FileInUse => format!(
+            "{} could not be replaced: {e}\n  \
+             A plug-in that is loaded is held open by the host, and \
+             administrator rights do not change that. Close the project --- or \
+             the whole host --- and try again.",
+            path.display()
+        ),
+        Denial::Other => format!("{} could not be written: {e}", path.display()),
+    }
 }
 
 fn hex(bytes: &[u8]) -> String {

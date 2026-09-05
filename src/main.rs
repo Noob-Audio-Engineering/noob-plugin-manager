@@ -13,8 +13,11 @@
 //! plug-in --- so a new one appears here the moment its own pipeline first
 //! runs, without this program being edited or re-released.
 
+mod elevate;
+mod gui;
 mod install;
 mod registry;
+mod settings;
 mod state;
 
 use registry::Manifest;
@@ -22,12 +25,16 @@ use state::State;
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    // No arguments opens the window. Every plug-in in this organisation puts
+    // its interface in a web view, and the program that installs them should
+    // not be the exception --- the subcommands stay for scripting.
     let (cmd, rest) = match args.split_first() {
         Some((c, r)) => (c.as_str(), r),
-        None => ("list", &[][..]),
+        None => ("gui", &[][..]),
     };
 
     let code = match cmd {
+        "gui" | "window" => gui::run(),
         "list" | "status" => cmd_list(),
         "install" => cmd_install(rest, false),
         "update" | "upgrade" => cmd_install(rest, true),
@@ -49,6 +56,7 @@ fn main() {
 fn help() {
     println!("{}", env!("CARGO_PKG_DESCRIPTION"));
     println!();
+    println!("  noob                      open the window (this is the usual way)");
     println!("  noob list                 what exists, what is installed, what is behind");
     println!("  noob install <id|all>     install or replace");
     println!("  noob update [id|all]      only what is behind (default: all)");
@@ -56,7 +64,7 @@ fn help() {
     println!("  noob where                the directories things go into");
 }
 
-fn agent() -> ureq::Agent {
+pub fn agent() -> ureq::Agent {
     ureq::AgentBuilder::new()
         .user_agent(concat!("noob-plugin-manager/", env!("CARGO_PKG_VERSION")))
         .timeout(std::time::Duration::from_secs(60))

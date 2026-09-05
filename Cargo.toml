@@ -23,5 +23,12 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 sha2 = "0.10"
 directories = "5"
 
+# The window and the web view. The framework's own webview crate only attaches
+# to a host's window, which is right for a plug-in and no use to a program that
+# has to open one --- so the window comes from `tao` and the view from the same
+# `wry` the plug-ins use, at the same version.
+tao = "0.31"
+wry = { version = "0.53", default-features = false, features = ["os-webview"] }
+
 [profile.release]
 strip = true

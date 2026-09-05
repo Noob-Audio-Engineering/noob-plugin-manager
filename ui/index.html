@@ -1,0 +1,404 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Noob Plugin Manager</title>
+<style>
+  :root{
+    --ink:#e8eaed; --dim:#8b93a1; --faint:#5c6472;
+    --bg:#0d1016; --panel:#141922; --raise:#1b2230; --line:#232a35;
+    --ok:#6fcf97; --amber:#e8b04b; --rose:#e2657a;
+    --accent:#4fd6c8;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    margin:0;display:flex;background:var(--bg);color:var(--ink);
+    font:13px/1.5 "Segoe UI",-apple-system,system-ui,sans-serif;
+    user-select:none;-webkit-user-select:none;overflow:hidden;
+  }
+  button{font:inherit;color:var(--ink);background:var(--raise);border:1px solid var(--line);
+    border-radius:6px;padding:6px 12px;cursor:pointer}
+  button:hover:not(:disabled){background:#232c3c;border-color:#39455e}
+  button:disabled{opacity:.42;cursor:default}
+  button.go{background:color-mix(in srgb,var(--accent) 16%,#12181f);
+    border-color:color-mix(in srgb,var(--accent) 42%,var(--line));color:var(--accent)}
+  button.go:hover:not(:disabled){background:color-mix(in srgb,var(--accent) 26%,#12181f)}
+  button.quiet{background:transparent;border-color:transparent;color:var(--dim)}
+  button.quiet:hover:not(:disabled){background:var(--raise);color:var(--ink)}
+
+  nav{width:212px;flex:0 0 212px;background:var(--panel);border-right:1px solid var(--line);
+    display:flex;flex-direction:column;height:100vh}
+  .brand{padding:15px 16px 12px;border-bottom:1px solid var(--line)}
+  .brand b{display:block;font-size:13px;font-weight:600;letter-spacing:.2px}
+  .brand span{color:var(--faint);font-size:11px}
+  .navlist{flex:1;overflow-y:auto;padding:8px 8px 12px}
+  .navhead{color:var(--faint);font-size:10px;text-transform:uppercase;
+    letter-spacing:.8px;padding:10px 8px 5px}
+  .navitem{display:flex;align-items:center;gap:9px;width:100%;text-align:left;
+    background:transparent;border:0;border-radius:6px;padding:7px 9px;color:var(--dim);cursor:pointer}
+  .navitem:hover{background:var(--raise);color:var(--ink)}
+  .navitem.on{background:var(--raise);color:var(--ink)}
+  .navitem .swatch{width:3px;height:15px;border-radius:2px;background:var(--faint);flex:0 0 3px}
+  .navitem.on .swatch{background:var(--accent)}
+  .navitem .label{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .dot{width:6px;height:6px;border-radius:50%;flex:0 0 6px}
+  .dot.current{background:var(--ok)} .dot.behind{background:var(--amber)}
+  .dot.missing{background:var(--faint)} .dot.unknown{background:var(--dim);opacity:.6}
+  .navfoot{padding:8px;border-top:1px solid var(--line)}
+  .navfoot button{width:100%;text-align:left}
+</style>
+<style>
+  main{flex:1;height:100vh;overflow-y:auto}
+  .wrap{padding:22px 26px 28px;max-width:760px}
+  h2{font-size:17px;font-weight:600;margin:0 0 3px}
+  .lede{color:var(--dim);margin:0 0 18px}
+  /* The banner is a photograph of the plug-in running, taken by its own
+     pipeline from the build being offered. The gradient underneath is the
+     fallback for a build published before the photographs existed, or one
+     whose picture could not be taken. */
+  .banner{position:relative;overflow:hidden;border-radius:10px;margin-bottom:18px;
+    border:1px solid var(--line);min-height:112px;display:flex;align-items:flex-end;
+    background:radial-gradient(120% 140% at 0% 0%, color-mix(in srgb,var(--accent) 26%,transparent), transparent 62%),
+      linear-gradient(180deg,#161d27,#11161e)}
+  .banner.shot{min-height:248px}
+  .banner img{position:absolute;inset:0;width:100%;height:100%;display:block;
+    object-fit:cover;object-position:top left}
+  .banner .over{position:relative;width:100%;padding:22px 22px 20px}
+  .banner.shot .over{padding-top:78px;
+    background:linear-gradient(180deg,rgba(9,12,17,0),rgba(9,12,17,.82) 38%,rgba(9,12,17,.97))}
+  .banner.shot h2,.banner.shot .tag{text-shadow:0 1px 10px rgba(9,12,17,.85)}
+  .banner h2{font-size:21px;letter-spacing:.2px}
+  .banner .tag{color:var(--dim);margin:4px 0 0;max-width:52ch}
+  .banner.shot .tag{color:#c9d4e0}
+  .banner .rule{height:2px;width:40px;border-radius:2px;background:var(--accent);margin:13px 0 0}
+  .card .thumb{display:block;width:100%;height:118px;object-fit:cover;object-position:top left;
+    border-radius:6px;border:1px solid var(--line);margin:0 0 9px;background:#0d1219}
+  /* Instruments and effects are different things to go looking for, so they
+     are listed apart rather than sorted together. */
+  .grouphead{font-size:10px;text-transform:uppercase;letter-spacing:.8px;color:var(--faint);
+    font-weight:600;margin:16px 0 7px}
+  .cards + .grouphead{margin-top:20px}
+  .navgroup{font-size:9.5px;text-transform:uppercase;letter-spacing:.8px;color:var(--faint);
+    padding:9px 10px 3px}
+  .facts{display:flex;gap:26px;flex-wrap:wrap;margin:0 0 18px}
+  .fact b{display:block;font-size:10px;text-transform:uppercase;letter-spacing:.7px;
+    color:var(--faint);font-weight:500;margin-bottom:2px}
+  .fact span{font-variant-numeric:tabular-nums}
+  .feats{list-style:none;padding:0;margin:0 0 20px}
+  .feats li{position:relative;padding:5px 0 5px 18px}
+  .feats li::before{content:"";position:absolute;left:2px;top:12px;width:5px;height:5px;
+    border-radius:50%;background:var(--accent);opacity:.85}
+  .actions{display:flex;gap:9px;align-items:center;flex-wrap:wrap}
+  .where{color:var(--faint);font-size:11px;margin-top:16px;line-height:1.7}
+  .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(228px,1fr));gap:10px;margin:2px 0 20px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:9px;padding:13px 14px;cursor:pointer}
+  .card:hover{border-color:#39455e;background:var(--raise)}
+  .card .top{display:flex;align-items:center;gap:8px;margin-bottom:5px}
+  .card b{font-weight:600}
+  .card p{margin:0;color:var(--dim);font-size:12px;
+    display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+  .state{font-size:12px}
+  .state.current{color:var(--ok)} .state.behind{color:var(--amber)}
+  .state.missing{color:var(--dim)} .state.unknown{color:var(--dim);font-style:italic}
+  .msg{margin:16px 0 0;padding:10px 12px;border-radius:7px;font-size:12px;border:1px solid}
+  .msg.err{color:var(--rose);border-color:color-mix(in srgb,var(--rose) 34%,var(--line));
+    background:color-mix(in srgb,var(--rose) 9%,transparent)}
+  .msg.note{color:var(--dim);border-color:var(--line);background:var(--panel)}
+  .msg .act{margin-top:9px}
+  .veil{position:fixed;inset:0;background:#05070ab8;display:flex;align-items:center;
+    justify-content:center;z-index:40}
+  .veil[hidden]{display:none}
+  .modal{width:520px;max-width:calc(100vw - 40px);background:var(--panel);
+    border:1px solid var(--line);border-radius:11px;overflow:hidden}
+  .modal header{padding:14px 18px;border-bottom:1px solid var(--line)}
+  .modal header b{font-size:14px}
+  .modal .body{padding:16px 18px}
+  .modal footer{padding:12px 18px;border-top:1px solid var(--line);
+    display:flex;gap:9px;justify-content:flex-end}
+  .field{margin-bottom:16px}
+  .field:last-child{margin-bottom:0}
+  .field label{display:block;font-size:12px;margin-bottom:5px}
+  .field .hint{color:var(--faint);font-size:11px;margin-top:5px;line-height:1.55}
+  .field input[type=password]{width:100%;background:#0f141c;border:1px solid var(--line);
+    border-radius:6px;color:var(--ink);font:inherit;padding:7px 9px;
+    user-select:text;-webkit-user-select:text}
+  .row{display:flex;align-items:flex-start;gap:9px}
+  .row input{margin-top:3px}
+</style>
+
+<nav>
+  <div class="brand"><b>Noob Plugin Manager</b><span id="brandsub">looking&hellip;</span></div>
+  <div class="navlist">
+    <div class="navhead">Overview</div>
+    <button class="navitem on" data-page="home">
+      <span class="swatch"></span><span class="label">Home</span>
+    </button>
+    <div class="navhead">Plug-ins</div>
+    <div id="navplugins"></div>
+  </div>
+  <div class="navfoot"><button class="quiet" id="opensettings">Settings&hellip;</button></div>
+</nav>
+
+<main><div class="wrap" id="page"></div></main>
+
+<div class="veil" id="veil" hidden>
+  <div class="modal">
+    <header><b>Settings</b></header>
+    <div class="body">
+      <div class="field">
+        <div class="row">
+          <input type="checkbox" id="preferuser">
+          <div>
+            <label for="preferuser">Install into my own plug-in folders</label>
+            <div class="hint" id="preferhint"></div>
+          </div>
+        </div>
+      </div>
+      <div class="field">
+        <label for="token">GitHub token</label>
+        <input type="password" id="token" placeholder="not required" spellcheck="false">
+        <div class="hint">Only raises GitHub's rate limit &mdash; everything this reads is
+          public, and it works without one until you ask too often. A token in the
+          environment is used first, so a machine set up for <code>gh</code> needs nothing here.</div>
+      </div>
+    </div>
+    <footer>
+      <button id="cancel">Cancel</button>
+      <button class="go" id="save">Save</button>
+    </footer>
+  </div>
+</div>
+<script>
+  const send = m => window.ipc.postMessage(JSON.stringify(m));
+  const $ = id => document.getElementById(id);
+  const el = (t, cls, text) => { const n = document.createElement(t);
+    if (cls) n.className = cls; if (text != null) n.textContent = text; return n; };
+
+  let S = { plugins: [], paths: [], settings: {} };
+  let page = 'home';
+
+  // The four states the command line prints, named and worded the same way, so
+  // the window and the terminal never disagree about what a plug-in is doing.
+  const STATE = {
+    current: 'up to date',
+    behind:  'behind',
+    missing: 'not installed',
+    unknown: 'installed, build unknown',
+  };
+  const find = id => S.plugins.find(p => p.id === id);
+  const titleOf = p => (p.display && p.display.name) || p.id;
+
+  // A plug-in says what it is in its own crate manifest. Anything it has not
+  // said stays in its own group rather than being guessed into one of the
+  // others --- a synth filed under effects is worse than a synth filed under
+  // nothing.
+  const KINDS = [['instrument', 'Instruments'], ['effect', 'Effects'], ['', 'Not yet said']];
+  const kindOf = p => {
+    const k = ((p.display && p.display.kind) || '').toLowerCase();
+    return k === 'instrument' || k === 'effect' ? k : '';
+  };
+  function groups() {
+    const out = KINDS
+      .map(([k, label]) => [label, S.plugins.filter(p => kindOf(p) === k)])
+      .filter(([, list]) => list.length);
+    // One unlabelled group is every plug-in on an older build; a heading
+    // reading "Not yet said" over the whole list says nothing worth a line.
+    if (out.length === 1 && out[0][0] === 'Not yet said') return [['', out[0][1]]];
+    return out;
+  }
+
+  function setBusy(on) {
+    for (const b of document.querySelectorAll('button')) b.disabled = on;
+  }
+
+  function drawNav() {
+    const box = $('navplugins');
+    box.innerHTML = '';
+    for (const [label, list] of groups()) {
+      if (label) box.appendChild(el('div', 'navgroup', label));
+      for (const p of list) {
+        const b = el('button', 'navitem' + (page === p.id ? ' on' : ''));
+        b.appendChild(el('span', 'swatch'));
+        b.appendChild(el('span', 'label', titleOf(p)));
+        b.appendChild(el('span', 'dot ' + p.state));
+        if (p.display && p.display.accent) b.style.setProperty('--accent', p.display.accent);
+        b.onclick = () => go(p.id);
+        box.appendChild(b);
+      }
+    }
+    const home = document.querySelector('.navitem[data-page="home"]');
+    home.className = 'navitem' + (page === 'home' ? ' on' : '');
+    $('brandsub').textContent = S.plugins.length
+      ? S.plugins.length + ' published'
+      : 'nothing published yet';
+  }
+
+  function actionsFor(p) {
+    const row = el('div', 'actions');
+    const main = el('button', p.state === 'current' ? '' : 'go',
+      p.state === 'current' ? 'Reinstall' : p.state === 'behind' ? 'Update' : 'Install');
+    main.onclick = () => { setBusy(true); send({ cmd: 'install', id: p.id }); };
+    row.appendChild(main);
+    if (p.state === 'current' || p.state === 'behind') {
+      const rm = el('button', '', 'Remove');
+      rm.onclick = () => { setBusy(true); send({ cmd: 'uninstall', id: p.id }); };
+      row.appendChild(rm);
+    }
+    row.appendChild(el('span', 'state ' + p.state, STATE[p.state] || p.state));
+    return row;
+  }
+
+  function whereBlock() {
+    const d = el('div', 'where');
+    for (const kv of S.paths) d.appendChild(el('div', null, kv[0].toUpperCase() + ' -> ' + kv[1]));
+    return d;
+  }
+
+  // A failure elevation would fix offers it. One elevation would not fix must
+  // never offer it: a prompt for administrator that then fails anyway teaches
+  // people to click through the next one.
+  function messages() {
+    const frag = document.createDocumentFragment();
+    if (S.problem) frag.appendChild(el('div', 'msg err', S.problem));
+    if (S.note) {
+      const m = el('div', 'msg ' + (S.canElevate ? 'err' : 'note'), S.note);
+      if (S.canElevate) {
+        const act = el('div', 'act');
+        const b = el('button', 'go', 'Retry as administrator');
+        b.onclick = () => { setBusy(true); send({ cmd: 'elevate' }); };
+        act.appendChild(b);
+        m.appendChild(act);
+      }
+      frag.appendChild(m);
+    }
+    return frag;
+  }
+
+  function drawHome() {
+    const w = $('page');
+    w.innerHTML = '';
+    w.style.removeProperty('--accent');
+    w.appendChild(el('h2', null, 'Your plug-ins'));
+    const behind = S.plugins.filter(p => p.state === 'behind').length;
+    const missing = S.plugins.filter(p => p.state === 'missing' || p.state === 'unknown').length;
+    w.appendChild(el('p', 'lede',
+      S.plugins.length === 0 ? 'Nothing found yet.'
+      : behind ? behind + ' behind the newest build.'
+      : missing ? missing + ' not installed from here yet.'
+      : 'Everything is up to date.'));
+
+    for (const [label, list] of groups()) {
+      if (label) w.appendChild(el('div', 'grouphead', label));
+      const cards = el('div', 'cards');
+      for (const p of list) {
+        const c = el('div', 'card');
+        if (p.display && p.display.accent) c.style.setProperty('--accent', p.display.accent);
+        if (p.banner) {
+          const img = el('img', 'thumb');
+          img.src = p.banner;
+          img.alt = titleOf(p) + ' running';
+          img.loading = 'lazy';
+          // A picture that will not load leaves no gap where a picture was.
+          img.onerror = () => img.remove();
+          c.appendChild(img);
+        }
+        const top = el('div', 'top');
+        top.appendChild(el('span', 'dot ' + p.state));
+        top.appendChild(el('b', null, titleOf(p)));
+        c.appendChild(top);
+        c.appendChild(el('p', null, (p.display && p.display.tagline) || 'No description published.'));
+        c.onclick = () => go(p.id);
+        cards.appendChild(c);
+      }
+      w.appendChild(cards);
+    }
+
+    const row = el('div', 'actions');
+    const all = el('button', 'go', 'Install everything');
+    all.onclick = () => { setBusy(true); send({ cmd: 'install_all' }); };
+    const ref = el('button', '', 'Refresh');
+    ref.onclick = () => { setBusy(true); send({ cmd: 'refresh' }); };
+    row.appendChild(all); row.appendChild(ref);
+    w.appendChild(row);
+    w.appendChild(whereBlock());
+    w.appendChild(messages());
+  }
+
+  function drawPlugin(id) {
+    const p = find(id);
+    if (!p) { drawHome(); return; }
+    const d = p.display || {};
+    const w = $('page');
+    w.innerHTML = '';
+    if (d.accent) w.style.setProperty('--accent', d.accent);
+    else w.style.removeProperty('--accent');
+
+    const ban = el('div', 'banner');
+    const over = el('div', 'over');
+    if (p.banner) {
+      const img = el('img');
+      img.src = p.banner;
+      img.alt = titleOf(p) + ' running';
+      // Only claim the picture is real once it is actually on the page.
+      // Only treat it as a photograph once it is actually on the page ---
+      // otherwise a picture that never arrives leaves a tall empty box.
+      img.onload = () => ban.classList.add('shot');
+      img.onerror = () => img.remove();
+      ban.appendChild(img);
+    }
+    over.appendChild(el('h2', null, titleOf(p)));
+    if (d.tagline) over.appendChild(el('p', 'tag', d.tagline));
+    over.appendChild(el('div', 'rule'));
+    ban.appendChild(over);
+    w.appendChild(ban);
+
+    const facts = el('div', 'facts');
+    const fact = (k, v) => { const f = el('div', 'fact');
+      f.appendChild(el('b', null, k)); f.appendChild(el('span', null, v)); return f; };
+    facts.appendChild(fact('Version', p.version));
+    facts.appendChild(fact('Build', p.commit));
+    facts.appendChild(fact('Published', p.built));
+    facts.appendChild(fact('On this machine',
+      p.state === 'behind' ? p.installed + ' - behind' : (STATE[p.state] || p.state)));
+    w.appendChild(facts);
+
+    if (d.features && d.features.length) {
+      const ul = el('ul', 'feats');
+      for (const f of d.features) ul.appendChild(el('li', null, f));
+      w.appendChild(ul);
+    }
+    w.appendChild(actionsFor(p));
+    w.appendChild(whereBlock());
+    w.appendChild(messages());
+  }
+
+  function draw() { drawNav(); if (page === 'home') drawHome(); else drawPlugin(page); }
+  function go(p) { page = p; draw(); }
+
+  // Called from Rust. One entry point, so a redraw has one path through it.
+  window.applyState = s => {
+    S = s;
+    if (page !== 'home' && !find(page)) page = 'home';
+    draw();
+    setBusy(false);
+  };
+
+  $('opensettings').onclick = () => {
+    $('preferuser').checked = !!S.settings.prefer_user_dirs;
+    $('token').value = S.settings.token || '';
+    $('preferhint').textContent = S.settings.shared_writable
+      ? 'The shared folders can be written, so this is a preference.'
+      : 'The shared folders cannot be written on this machine, so this is already what happens.';
+    $('veil').hidden = false;
+  };
+  $('cancel').onclick = () => { $('veil').hidden = true; };
+  $('save').onclick = () => {
+    $('veil').hidden = true;
+    setBusy(true);
+    send({ cmd: 'save_settings',
+           prefer_user_dirs: $('preferuser').checked,
+           token: $('token').value });
+  };
+  document.querySelector('.navitem[data-page="home"]').onclick = () => go('home');
+
+  send({ cmd: 'refresh' });
+</script>

@@ -36,6 +36,34 @@ pub struct Manifest {
     pub sha256: String,
     pub url: String,
     pub installs: Vec<Install>,
+    /// How the plug-in describes itself, from its own crate manifest. Absent
+    /// on a build made before this existed, and on a crate that has not filled
+    /// it in --- both of which mean "not said" rather than "wrong".
+    #[serde(default)]
+    pub display: Option<Display>,
+    /// A photograph of the plug-in running, taken by its own pipeline from the
+    /// build this manifest describes. Absent when the picture could not be
+    /// taken --- the manager then shows the plug-in without one rather than
+    /// treating the release as broken.
+    #[serde(default)]
+    pub banner: Option<String>,
+}
+
+/// A plug-in's own words about itself. None of it is written here: the
+/// installer holding a description of somebody else's work would be a
+/// description kept where its author never looks.
+#[derive(Debug, Clone, Deserialize, serde::Serialize)]
+pub struct Display {
+    pub name: Option<String>,
+    pub tagline: Option<String>,
+    #[serde(default)]
+    pub features: Vec<String>,
+    pub accent: Option<String>,
+    /// `instrument` or `effect`, in the plug-in's own words. Anything else,
+    /// or nothing, files it under neither --- a plug-in that has not said
+    /// what it is still needs to be installable.
+    #[serde(default)]
+    pub kind: Option<String>,
 }
 
 /// One installable part of a bundle, and which directory it belongs in.
@@ -193,14 +221,7 @@ fn get_json<T: serde::de::DeserializeOwned>(agent: &ureq::Agent, url: &str) -> R
     }
 }
 
-/// A token from the environment, if the machine has one. Never required.
+/// A token, from the environment or the settings. Never required.
 fn token() -> Option<String> {
-    for k in ["GITHUB_TOKEN", "GH_TOKEN"] {
-        if let Ok(v) = std::env::var(k)
-            && !v.trim().is_empty()
-        {
-            return Some(v);
-        }
-    }
-    None
+    crate::settings::Settings::load().effective_token()
 }

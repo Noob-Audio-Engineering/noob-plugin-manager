@@ -100,7 +100,7 @@ pub fn install_dir(into: &str) -> Result<PathBuf, String> {
     // one beside it is not, which is not a difference anybody chose --- so
     // asking rather than assuming is the only way to get both right.
     let shared = plugin_root()?.join(leaf);
-    if writable(&shared) {
+    if !crate::settings::Settings::load().prefer_user_dirs && writable(&shared) {
         return Ok(shared);
     }
     let user = user_root()?.join(leaf);
@@ -155,4 +155,16 @@ fn plugin_root() -> Result<PathBuf, String> {
             std::env::consts::OS
         ))
     }
+}
+
+/// Whether the shared, machine-wide plug-in folders can be written.
+///
+/// The settings panel asks so it can say whether installing into your own
+/// folders is a preference or already the only thing that can happen ---
+/// which on this project's machines differs between VST3 and CLAP.
+pub fn shared_writable() -> bool {
+    let Ok(root) = plugin_root() else {
+        return false;
+    };
+    ["VST3", "CLAP"].iter().all(|l| writable(&root.join(l)))
 }

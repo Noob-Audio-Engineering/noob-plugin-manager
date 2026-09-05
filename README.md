@@ -3,6 +3,13 @@
 `noob` installs and updates every Noob Audio Engineering plug-in, from the
 builds their own repositories publish. Windows and macOS.
 
+Running it with no arguments opens a window: a left-hand list of what is
+published, a page for each plug-in saying what it is and what it does, and a
+button to install it. Every plug-in in this organisation puts its interface
+in a web view, and the program that installs them is not the exception.
+
+The subcommands stay, for scripting:
+
 ```sh
 noob list                 # what exists, what is installed, what is behind
 noob install all          # install or replace every one
@@ -11,6 +18,19 @@ noob update               # only what is behind
 noob uninstall noob-q     # remove exactly what an install added
 noob where                # the directories things go into
 ```
+
+### The pictures are real
+
+A plug-in's banner is a photograph of that build running, taken by its own
+pipeline: the standalone serves exactly the page the plug-in embeds over
+exactly the same bridge, so the picture is the plug-in rather than a drawing
+of one, and it cannot go stale, because it is taken from the build it ships
+beside. A build published before this existed simply has no picture.
+
+Instruments and effects are listed apart, using the `kind` each plug-in
+states in its own crate manifest. One that has not said what it is is filed
+under neither: a synth listed among the effects is worse than a synth listed
+under nothing.
 
 ## It has no list of plug-ins in it
 
