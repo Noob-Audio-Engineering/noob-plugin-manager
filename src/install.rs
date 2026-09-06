@@ -129,6 +129,30 @@ fn unpack(bytes: &[u8], into: &Path) -> Result<(), String> {
         let mut file =
             std::fs::File::create(&out).map_err(|e| format!("{}: {e}", out.display()))?;
         std::io::copy(&mut entry, &mut file).map_err(|e| format!("{}: {e}", out.display()))?;
+        drop(file);
+
+        // **The executable bit, which the archive carries and `File::create`
+        // does not.**
+        //
+        // On Windows this is nothing: there is no such bit, and the plug-in
+        // loads either way. On macOS it is the whole install. A `.vst3` is a
+        // bundle whose real content is `Contents/MacOS/<name>`, and the
+        // system will not load that unless it is executable --- so the
+        // directory appears exactly where it should, with the right
+        // `Info.plist` and the right binary inside it, and the host finds
+        // nothing. Installed and invisible, on one platform only, which is
+        // why it survived: every check anyone ran was run here.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            // Masked: `unix_mode` hands back the file-type bits too
+            // (0o100755 for a regular file), and only the permission bits
+            // belong in a `chmod`.
+            if let Some(mode) = entry.unix_mode() {
+                std::fs::set_permissions(&out, std::fs::Permissions::from_mode(mode & 0o777))
+                    .map_err(|e| format!("{}: {e}", out.display()))?;
+            }
+        }
     }
     Ok(())
 }
@@ -214,4 +238,72 @@ pub fn targets(m: &Manifest) -> Vec<(String, PathBuf)> {
                 .map(|d| (p.kind.clone(), d.join(&p.path)))
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Build a zip in memory holding one executable and one plain file, the
+    /// way a plug-in bundle is shaped.
+    fn bundle_zip() -> Vec<u8> {
+        use zip::write::SimpleFileOptions;
+        let mut buf = std::io::Cursor::new(Vec::new());
+        {
+            let mut w = zip::ZipWriter::new(&mut buf);
+            let exe = SimpleFileOptions::default().unix_permissions(0o755);
+            let plain = SimpleFileOptions::default().unix_permissions(0o644);
+            w.start_file("thing.vst3/Contents/MacOS/thing", exe)
+                .unwrap();
+            std::io::Write::write_all(&mut w, b"\xcf\xfa\xed\xfe not really a binary").unwrap();
+            w.start_file("thing.vst3/Contents/Info.plist", plain)
+                .unwrap();
+            std::io::Write::write_all(&mut w, b"<plist/>").unwrap();
+            w.finish().unwrap();
+        }
+        buf.into_inner()
+    }
+
+    /// **The binary has to come out executable.**
+    ///
+    /// A `.vst3` is a bundle whose real content is `Contents/MacOS/<name>`,
+    /// and macOS will not load that unless the executable bit is set. The
+    /// archive carries the bit and `File::create` does not, so an extractor
+    /// that ignores it lays the bundle down perfectly --- right directory,
+    /// right `Info.plist`, right bytes --- and the host finds nothing. It is
+    /// invisible on macOS and harmless on Windows, which is why it lasted.
+    #[test]
+    fn unpacking_keeps_the_executable_bit() {
+        let dir = std::env::temp_dir().join(format!("noob-unpack-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        unpack(&bundle_zip(), &dir).expect("the archive should unpack");
+
+        let bin = dir.join("thing.vst3/Contents/MacOS/thing");
+        assert!(bin.exists(), "the binary was not written");
+
+        // The archive must be carrying the bit in the first place, or the
+        // extractor has nothing to restore and this test proves nothing.
+        let mut z = zip::ZipArchive::new(std::io::Cursor::new(bundle_zip())).unwrap();
+        let mode = z
+            .by_name("thing.vst3/Contents/MacOS/thing")
+            .unwrap()
+            .unix_mode();
+        assert_eq!(
+            mode.map(|m| m & 0o777),
+            Some(0o755),
+            "the archive did not carry a mode"
+        );
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let got = std::fs::metadata(&bin).unwrap().permissions().mode() & 0o777;
+            assert_eq!(got, 0o755, "the binary came out as {got:o}, not executable");
+            let plist = dir.join("thing.vst3/Contents/Info.plist");
+            let got = std::fs::metadata(plist).unwrap().permissions().mode() & 0o777;
+            assert_eq!(got, 0o644, "a plain file was made executable");
+        }
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
