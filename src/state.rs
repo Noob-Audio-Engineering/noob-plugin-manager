@@ -69,7 +69,20 @@ fn state_file() -> Option<PathBuf> {
     Some(dirs.data_local_dir().join("installed.json"))
 }
 
-/// Where a `vst3` or `clap` part belongs on this machine.
+/// Whether this machine can host a part of the given kind at all.
+///
+/// Audio Units are a macOS format and there is nowhere on Windows for one to
+/// go. A build that carries one is not a broken build --- every macOS
+/// download carries all three --- so a Windows install steps over it rather
+/// than refusing the whole plug-in.
+pub fn belongs_here(into: &str) -> bool {
+    match into {
+        "au" => cfg!(target_os = "macos"),
+        _ => true,
+    }
+}
+
+/// Where a `vst3`, `clap` or `au` part belongs on this machine.
 ///
 /// **Windows** uses the shared, machine-wide directories every host scans; on
 /// this project's machines they are writable without elevation.
@@ -89,6 +102,10 @@ pub fn install_dir(into: &str) -> Result<PathBuf, String> {
     let leaf = match into {
         "vst3" => "VST3",
         "clap" => "CLAP",
+        // Audio Units live in `Components`, not in a folder named after the
+        // format --- the directory is older than the habit of naming one
+        // after the plug-in standard, and every macOS host looks there.
+        "au" => "Components",
         other => {
             return Err(format!(
                 "the manifest asks for a `{other}` directory, which this installer does not know about --- update it"
@@ -167,4 +184,61 @@ pub fn shared_writable() -> bool {
         return false;
     };
     ["VST3", "CLAP"].iter().all(|l| writable(&root.join(l)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// **A part this machine cannot host is skipped, not refused.**
+    ///
+    /// Every macOS download carries all three formats and the Windows one
+    /// carries two, so a Windows machine reading a macOS manifest --- which is
+    /// what happens the moment anybody shares a link --- must step over the
+    /// Audio Unit rather than fail the whole install. The opposite mistake is
+    /// worse: silently skipping something this machine *can* host would leave
+    /// a plug-in half installed and report success.
+    #[test]
+    fn only_the_parts_this_machine_can_host() {
+        assert!(belongs_here("vst3"), "vst3 belongs everywhere");
+        assert!(belongs_here("clap"), "clap belongs everywhere");
+        assert_eq!(
+            belongs_here("au"),
+            cfg!(target_os = "macos"),
+            "an Audio Unit belongs on macOS and nowhere else"
+        );
+    }
+
+    /// Every kind the manifests actually publish has somewhere to go, on the
+    /// platform that can host it.
+    ///
+    /// A kind the installer does not know about is an error with the name in
+    /// it, which is right --- but only if the kinds we do publish are known,
+    /// and this is what says they are.
+    #[test]
+    fn every_published_kind_has_a_home() {
+        for kind in ["vst3", "clap", "au"] {
+            if !belongs_here(kind) {
+                continue;
+            }
+            let dir = install_dir(kind).unwrap_or_else(|e| panic!("`{kind}` has no home: {e}"));
+            let leaf = dir.file_name().and_then(|s| s.to_str()).unwrap_or("");
+            let want = match kind {
+                "vst3" => "VST3",
+                "clap" => "CLAP",
+                // Audio Units live in `Components`: the directory is older
+                // than the habit of naming one after the plug-in standard.
+                "au" => "Components",
+                _ => unreachable!(),
+            };
+            assert_eq!(leaf, want, "`{kind}` was sent to {}", dir.display());
+        }
+    }
+
+    /// A kind from the future is refused by name rather than guessed at.
+    #[test]
+    fn an_unknown_kind_says_what_it_was() {
+        let e = install_dir("aax").expect_err("an unknown kind should not resolve");
+        assert!(e.contains("aax"), "the message does not name the kind: {e}");
+    }
 }

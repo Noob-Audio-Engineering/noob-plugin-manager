@@ -35,6 +35,11 @@ pub fn install(agent: &ureq::Agent, m: &Manifest) -> Result<Record, String> {
         unpack(&zip, &staged)?;
         let mut created = Vec::new();
         for part in &m.installs {
+            // An Audio Unit in a Windows download is not an error to report,
+            // it is a part of the build this machine has no use for.
+            if !crate::state::belongs_here(&part.into) {
+                continue;
+            }
             let dir = install_dir(&part.into)?;
             std::fs::create_dir_all(&dir)
                 .map_err(|e| format!("{} cannot be created: {e}", dir.display()))?;
