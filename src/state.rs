@@ -76,10 +76,10 @@ fn state_file() -> Option<PathBuf> {
 /// download carries all three --- so a Windows install steps over it rather
 /// than refusing the whole plug-in.
 pub fn belongs_here(into: &str) -> bool {
-    match into {
-        "au" => cfg!(target_os = "macos"),
-        _ => true,
+    if into == "au" {
+        return cfg!(target_os = "macos");
     }
+    true
 }
 
 /// Where a `vst3`, `clap` or `au` part belongs on this machine.
