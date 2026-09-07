@@ -87,13 +87,16 @@ pub fn belongs_here(into: &str) -> bool {
 /// **Windows** uses the shared, machine-wide directories every host scans; on
 /// this project's machines they are writable without elevation.
 ///
-/// **macOS** uses the *user's* `~/Library/Audio/Plug-Ins`, not
-/// `/Library/Audio/Plug-Ins`, and that is a deliberate choice rather than a
-/// simplification: every host scans both, the user one needs no
-/// administrator, and an installer that asks for a password to put a free
-/// plug-in on your own machine is asking for more than it needs. A plug-in
-/// already installed system-wide by something else is left alone --- this
-/// program only removes what it put there.
+/// **macOS** uses the machine-wide `/Library/Audio/Plug-Ins`, and asks for a
+/// password when it cannot write there. It used to install into the user's
+/// own `~/Library` to avoid ever asking, which is tidy right up until the
+/// plug-in does not appear: a second account, a host launched by something
+/// else, or simply a machine where everything else lives in `/Library` and
+/// this one thing does not. Where a plug-in goes is not a place to be clever.
+///
+/// The user's own folder is still there as the fallback, and
+/// `prefer_user_dirs` still chooses it outright for anyone who would rather
+/// not be asked.
 ///
 /// Where a directory cannot be written, the install fails with the path in
 /// the message rather than silently putting the plug-in somewhere no host
@@ -112,16 +115,20 @@ pub fn install_dir(into: &str) -> Result<PathBuf, String> {
             ));
         }
     };
-    // The shared directory when it can be written, and the user's own when it
-    // cannot. On this machine the shared VST3 folder is writable and the CLAP
-    // one beside it is not, which is not a difference anybody chose --- so
-    // asking rather than assuming is the only way to get both right.
-    let shared = plugin_root()?.join(leaf);
-    if !crate::settings::Settings::load().prefer_user_dirs && writable(&shared) {
-        return Ok(shared);
+    // The machine-wide directory, unless the person has asked for their own.
+    //
+    // **No silent fallback.** This used to check whether the shared folder
+    // was writable and quietly use the user's when it was not, which reports
+    // success and puts the plug-in somewhere nobody chose --- and on a
+    // machine where everything else lives in the shared folder, "installed"
+    // and "where you expected it" stop being the same thing. Returning the
+    // shared path lets the write fail, and a failed write is what
+    // `crate::elevate` classifies and the interface turns into an offer of
+    // administrator. Asking is the point.
+    if crate::settings::Settings::load().prefer_user_dirs {
+        return Ok(user_root()?.join(leaf));
     }
-    let user = user_root()?.join(leaf);
-    Ok(user)
+    Ok(plugin_root()?.join(leaf))
 }
 
 /// Whether a directory can be created in and written to, asked by doing it
@@ -149,9 +156,8 @@ fn user_root() -> Result<PathBuf, String> {
             .map_err(|_| "no LOCALAPPDATA on this system".to_string())?;
         Ok(Path::new(&local).join("Programs").join("Common"))
     } else if cfg!(target_os = "macos") {
-        // Already the user's own on macOS, so there is nothing to fall back
-        // to and nothing that would need a password.
-        plugin_root()
+        let home = std::env::var("HOME").map_err(|_| "no HOME on this system".to_string())?;
+        Ok(Path::new(&home).join("Library/Audio/Plug-Ins"))
     } else {
         plugin_root()
     }
@@ -164,8 +170,9 @@ fn plugin_root() -> Result<PathBuf, String> {
             .unwrap_or_else(|_| r"C:\Program Files\Common Files".to_string());
         Ok(PathBuf::from(common))
     } else if cfg!(target_os = "macos") {
-        let home = std::env::var("HOME").map_err(|_| "no HOME on this system".to_string())?;
-        Ok(Path::new(&home).join("Library/Audio/Plug-Ins"))
+        // The machine-wide one. Writing here needs a password, which
+        // `crate::elevate` asks for rather than silently going elsewhere.
+        Ok(PathBuf::from("/Library/Audio/Plug-Ins"))
     } else {
         Err(format!(
             "this installer knows where plug-ins go on Windows and macOS, and this is {}.              The builds exist; only the destination is missing.",
@@ -241,4 +248,40 @@ mod tests {
         let e = install_dir("aax").expect_err("an unknown kind should not resolve");
         assert!(e.contains("aax"), "the message does not name the kind: {e}");
     }
+    /// **The machine-wide directory, and no quiet detour.**
+    ///
+    /// The point of asking for a password is that the plug-in ends up where
+    /// the person expects. An installer that notices it cannot write and puts
+    /// the file somewhere else instead reports success and leaves them
+    /// looking for it, which is the failure this replaced.
+    #[test]
+    fn the_shared_directory_is_the_one_chosen() {
+        let dir = install_dir("vst3").expect("vst3 has a home");
+        let shared = plugin_root().expect("this platform has a plug-in root");
+        assert!(
+            dir.starts_with(&shared),
+            "{} is not under the machine-wide {}",
+            dir.display(),
+            shared.display()
+        );
+        if cfg!(target_os = "macos") {
+            assert!(
+                dir.starts_with("/Library/Audio/Plug-Ins"),
+                "macOS should install machine-wide, got {}",
+                dir.display()
+            );
+        }
+    }
+
+    /// And the two roots really are different places, or the fallback and the
+    /// escalation are the same thing and neither means anything.
+    #[test]
+    fn the_user_root_is_somewhere_else() {
+        let (shared, user) = (plugin_root().unwrap(), user_root().unwrap());
+        assert_ne!(
+            shared, user,
+            "the shared and user roots are the same path, so asking for a              password could never change where anything goes"
+        );
+    }
+
 }

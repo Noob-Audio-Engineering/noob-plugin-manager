@@ -46,8 +46,7 @@ pub fn classify(target: &Path) -> Denial {
 
 /// Start this program again with administrator rights, running `args`.
 ///
-/// Windows only: on macOS everything installs into the user's own folders, so
-/// there is nothing that elevation would unlock and nothing to ask for.
+/// On Windows this raises the consent prompt; on macOS, the password one.
 #[cfg(windows)]
 pub fn relaunch(args: &[String]) -> Result<(), String> {
     use std::os::windows::ffi::OsStrExt;
@@ -95,7 +94,63 @@ pub fn relaunch(args: &[String]) -> Result<(), String> {
     }
 }
 
-#[cfg(not(windows))]
+/// Start this program again with administrator rights, running `args`.
+///
+/// `osascript` is how a macOS program asks: `with administrator privileges`
+/// shows the system's own password panel, and what it runs, runs as root.
+/// There is no way to raise the rights of a process that is already going, on
+/// either system --- both of these start a second copy and let the first one
+/// finish.
+///
+/// The command is assembled with the executable path quoted, because a person
+/// may well have put this program somewhere with a space in the name and the
+/// shell that `osascript` spawns would otherwise read it as two words.
+#[cfg(target_os = "macos")]
+pub fn relaunch(args: &[String]) -> Result<(), String> {
+    let exe = std::env::current_exe().map_err(|e| format!("cannot find this program: {e}"))?;
+    let mut cmd = shell_quote(&exe.to_string_lossy());
+    for a in args {
+        cmd.push(' ');
+        cmd.push_str(&shell_quote(a));
+    }
+    // The whole shell command becomes an AppleScript string, so its quotes
+    // and backslashes have to survive a second round of escaping.
+    let script = format!(
+        "do shell script \"{}\" with administrator privileges",
+        cmd.replace(BACKSLASH, "\\\\").replace(QUOTE, "\\\"")
+    );
+    let out = std::process::Command::new("/usr/bin/osascript")
+        .arg("-e")
+        .arg(&script)
+        .output()
+        .map_err(|e| format!("could not ask for administrator: {e}"))?;
+    if out.status.success() {
+        return Ok(());
+    }
+    let err = String::from_utf8_lossy(&out.stderr);
+    // -128 is the person pressing Cancel, which is not a fault to report as
+    // one.
+    if err.contains("-128") || err.to_lowercase().contains("user canceled") {
+        return Err("the request for administrator was declined".into());
+    }
+    Err(format!("could not ask for administrator: {}", err.trim()))
+}
+
+#[cfg(target_os = "macos")]
+const BACKSLASH: char = '\\';
+#[cfg(target_os = "macos")]
+const QUOTE: char = '"';
+
+/// Wrap a word so a shell reads it as one word, whatever is in it.
+#[cfg(target_os = "macos")]
+fn shell_quote(s: &str) -> String {
+    // Single quotes take everything literally; the only thing that cannot
+    // appear inside them is a single quote, which is closed, escaped and
+    // reopened in the usual way.
+    format!("{Q}{}{Q}", s.replace("'", r"'\''"), Q = "'")
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
 pub fn relaunch(_args: &[String]) -> Result<(), String> {
     Err("this system installs into your own folders, so administrator is never needed".into())
 }
