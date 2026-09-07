@@ -44,11 +44,19 @@ pub fn classify(target: &Path) -> Denial {
     }
 }
 
-/// Start this program again with administrator rights, running `args`.
+/// Start this program again with administrator rights, running `args`, and
+/// return whatever it printed on stdout.
 ///
 /// On Windows this raises the consent prompt; on macOS, the password one.
+///
+/// **Windows returns nothing.** `ShellExecuteW` starts the process and does
+/// not wait for it or give a handle to its output, so there is no result to
+/// read --- and none is needed: an elevated process on Windows keeps the same
+/// `LOCALAPPDATA`, so it writes the record to the same file the unelevated one
+/// reads. macOS is where the two disagree, and macOS is where the result is
+/// used.
 #[cfg(windows)]
-pub fn relaunch(args: &[String]) -> Result<(), String> {
+pub fn relaunch(args: &[String]) -> Result<String, String> {
     use std::os::windows::ffi::OsStrExt;
 
     fn wide(s: &str) -> Vec<u16> {
@@ -90,11 +98,12 @@ pub fn relaunch(args: &[String]) -> Result<(), String> {
     match r {
         5 => Err("the request for administrator was declined".into()),
         n if n <= 32 => Err(format!("could not ask for administrator (code {n})")),
-        _ => Ok(()),
+        _ => Ok(String::new()),
     }
 }
 
-/// Start this program again with administrator rights, running `args`.
+/// Start this program again with administrator rights, running `args`, and
+/// return whatever it printed on stdout.
 ///
 /// `osascript` is how a macOS program asks: `with administrator privileges`
 /// shows the system's own password panel, and what it runs, runs as root.
@@ -102,11 +111,18 @@ pub fn relaunch(args: &[String]) -> Result<(), String> {
 /// either system --- both of these start a second copy and let the first one
 /// finish.
 ///
+/// **The stdout is the point, not a courtesy.** The elevated copy runs as
+/// root, and where the install record lives is resolved against `$HOME`, so
+/// that copy cannot write the record the user's own window reads --- it would
+/// either put it in root's home or leave the user's file owned by root and
+/// unwritable ever after. It prints the record instead, `do shell script`
+/// returns it here, and the caller --- still the user --- saves it.
+///
 /// The command is assembled with the executable path quoted, because a person
 /// may well have put this program somewhere with a space in the name and the
 /// shell that `osascript` spawns would otherwise read it as two words.
 #[cfg(target_os = "macos")]
-pub fn relaunch(args: &[String]) -> Result<(), String> {
+pub fn relaunch(args: &[String]) -> Result<String, String> {
     let exe = std::env::current_exe().map_err(|e| format!("cannot find this program: {e}"))?;
     let mut cmd = shell_quote(&exe.to_string_lossy());
     for a in args {
@@ -125,7 +141,7 @@ pub fn relaunch(args: &[String]) -> Result<(), String> {
         .output()
         .map_err(|e| format!("could not ask for administrator: {e}"))?;
     if out.status.success() {
-        return Ok(());
+        return Ok(String::from_utf8_lossy(&out.stdout).trim().to_string());
     }
     let err = String::from_utf8_lossy(&out.stderr);
     // -128 is the person pressing Cancel, which is not a fault to report as
@@ -151,6 +167,6 @@ fn shell_quote(s: &str) -> String {
 }
 
 #[cfg(not(any(windows, target_os = "macos")))]
-pub fn relaunch(_args: &[String]) -> Result<(), String> {
+pub fn relaunch(_args: &[String]) -> Result<String, String> {
     Err("this system installs into your own folders, so administrator is never needed".into())
 }

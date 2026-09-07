@@ -13,6 +13,15 @@
 //! neither the old build nor the new one. Everything is staged beside the
 //! target and moved into place only once all of it has arrived, and a locked
 //! file is reported as a locked file rather than as a mysterious failure.
+//!
+//! **And never leave one half-*installed* without saying so.** That promise
+//! held for each part on its own and not for the three together: a build whose
+//! VST3 and CLAP were written and whose Audio Unit was refused returned a
+//! plain error, and the caller recorded nothing. Two bundles sat in the
+//! plug-in folders that the manager did not know it had put there --- listed
+//! as "installed, build unknown", and untouchable by `uninstall`, which will
+//! not remove what it cannot account for. So a failure carries the parts that
+//! did land, and the caller records them.
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -22,18 +31,42 @@ use sha2::{Digest, Sha256};
 use crate::registry::Manifest;
 use crate::state::{Record, install_dir};
 
-/// Download, verify and install one plug-in. Returns the paths it created.
-pub fn install(agent: &ureq::Agent, m: &Manifest) -> Result<Record, String> {
-    let zip = fetch(agent, m)?;
+/// A failed install, and whatever it managed to put on disk first.
+///
+/// The parts are installed one at a time, so a refusal on the third leaves the
+/// first two in place. Reporting only the error loses them: nothing records
+/// them, `uninstall` will not touch what it has no record of, and they sit in
+/// the plug-in folder as somebody else's problem.
+pub struct Failed {
+    /// What went wrong, in the words the caller prints.
+    pub error: String,
+    /// The parts that were installed before it did, if any. The caller records
+    /// this so that what is on disk and what the manager believes is on disk
+    /// are the same thing.
+    pub partial: Option<Record>,
+}
+
+/// Download, verify and install one plug-in. Returns the paths it created, or
+/// the failure together with anything that landed before it.
+///
+/// The error is boxed because it carries a whole `Record`, and an unboxed
+/// `Result` would be as large as its failure case on every successful call.
+pub fn install(agent: &ureq::Agent, m: &Manifest) -> Result<Record, Box<Failed>> {
+    // Nothing below this point has touched a plug-in folder yet, so these
+    // failures carry no partial install.
+    let zip = fetch(agent, m).map_err(Failed::nothing_landed)?;
     let staged = std::env::temp_dir().join(format!("noob-install-{}-{}", m.id, std::process::id()));
     // A stale staging directory from an interrupted run must not be mistaken
     // for this one's work.
     let _ = std::fs::remove_dir_all(&staged);
-    std::fs::create_dir_all(&staged).map_err(|e| format!("{}: {e}", staged.display()))?;
+    std::fs::create_dir_all(&staged)
+        .map_err(|e| Failed::nothing_landed(format!("{}: {e}", staged.display())))?;
 
-    let result = (|| {
+    // Held outside the closure so that a failure can still report what was
+    // placed before it --- which is the whole point of `Failed::partial`.
+    let mut created: Vec<PathBuf> = Vec::new();
+    let result = (|created: &mut Vec<PathBuf>| {
         unpack(&zip, &staged)?;
-        let mut created = Vec::new();
         for part in &m.installs {
             // An Audio Unit in a Windows download is not an error to report,
             // it is a part of the build this machine has no use for.
@@ -54,18 +87,41 @@ pub fn install(agent: &ureq::Agent, m: &Manifest) -> Result<Record, String> {
             replace(&from, &to)?;
             created.push(to);
         }
-        Ok(created)
-    })();
+        Ok(())
+    })(&mut created);
 
     let _ = std::fs::remove_dir_all(&staged);
-    let created = result?;
 
-    Ok(Record {
+    let record = |paths: Vec<PathBuf>| Record {
         version: m.version.clone(),
         commit: m.commit.clone(),
+        // The manifest's own word for which build this is, not this machine's
+        // guess. They agree on a correct install; recording the manifest's is
+        // what makes a wrong one detectable afterwards.
+        platform: Some(m.platform.clone()),
         installed: now(),
-        paths: created,
-    })
+        paths,
+    };
+
+    match result {
+        Ok(()) => Ok(record(created)),
+        Err(error) => Err(Box::new(Failed {
+            error,
+            // Only when something actually landed. An empty record would
+            // claim an install that never began.
+            partial: (!created.is_empty()).then(|| record(created)),
+        })),
+    }
+}
+
+impl Failed {
+    /// A failure from before any part was placed.
+    fn nothing_landed(error: String) -> Box<Failed> {
+        Box::new(Failed {
+            error,
+            partial: None,
+        })
+    }
 }
 
 /// Remove everything a previous install of `id` created.
@@ -205,8 +261,9 @@ fn locked(path: &Path, e: &std::io::Error) -> String {
             "{} could not be written: {e}\n  \
              The folder itself refuses writes. Administrator rights would fix \
              this, or you can install into your own plug-in folders instead.\n  \
-             ELEVATABLE",
-            path.display()
+             {}",
+            path.display(),
+            crate::gui::ELEVATABLE
         ),
         Denial::FileInUse => format!(
             "{} could not be replaced: {e}\n  \
@@ -233,16 +290,48 @@ fn now() -> String {
     format!("{secs}")
 }
 
-/// Where the parts of `m` would go, for reporting before anything is done.
+/// Where the parts of `m` this machine can host would go, for reporting before
+/// anything is done.
+///
+/// Filtered by `belongs_here`, or a Windows machine reading a macOS manifest
+/// would be told it is missing an Audio Unit it has nowhere to put.
 pub fn targets(m: &Manifest) -> Vec<(String, PathBuf)> {
     m.installs
         .iter()
+        .filter(|p| crate::state::belongs_here(&p.into))
         .filter_map(|p| {
             install_dir(&p.into)
                 .ok()
                 .map(|d| (p.kind.clone(), d.join(&p.path)))
         })
         .collect()
+}
+
+/// The parts `m` says this machine should have that are not on disk.
+///
+/// **A record is not enough to answer "is this installed".** The formats go in
+/// one at a time, so an install can leave the VST3 and CLAP in place and be
+/// refused the Audio Unit --- and the record that describes it names the right
+/// commit and the right platform, so anything reading only the record calls it
+/// up to date. It looks complete in the window and in `list`, and the Audio
+/// Unit never appears in any host.
+pub fn missing_parts(m: &Manifest) -> Vec<String> {
+    targets(m)
+        .into_iter()
+        .filter(|(_, path)| !path.exists())
+        .map(|(kind, _)| format_kind(&kind))
+        .collect()
+}
+
+/// A format's name as somebody would say it out loud. The manifest's `kind` is
+/// a key, and "installed without its au" is not a sentence.
+fn format_kind(kind: &str) -> String {
+    match kind {
+        "au" => "Audio Unit".to_string(),
+        "vst3" => "VST3".to_string(),
+        "clap" => "CLAP".to_string(),
+        other => other.to_string(),
+    }
 }
 
 #[cfg(test)]
@@ -267,6 +356,71 @@ mod tests {
             w.finish().unwrap();
         }
         buf.into_inner()
+    }
+
+    /// Every kind the manifests publish reads as a name in a sentence, because
+    /// the reason a plug-in is not current is shown to a person: "missing its
+    /// Audio Unit", not "missing its au".
+    #[test]
+    fn every_kind_has_a_name_somebody_would_say() {
+        assert_eq!(format_kind("au"), "Audio Unit");
+        assert_eq!(format_kind("vst3"), "VST3");
+        assert_eq!(format_kind("clap"), "CLAP");
+        // A kind from a later manifest is passed through rather than dropped:
+        // an unfamiliar name in the message beats a silent omission.
+        assert_eq!(format_kind("aax"), "aax");
+    }
+
+    /// **A directory that refuses writes is marked for the window.**
+    ///
+    /// `locked` is what turns a failed write into a message, and the marker it
+    /// puts there is the only thing that makes the window offer
+    /// administrator. Asserted from the real function rather than from a
+    /// string written here, so that changing the wording breaks this instead
+    /// of quietly removing the offer.
+    #[cfg(unix)]
+    #[test]
+    fn a_refused_directory_is_marked_elevatable() {
+        use std::os::unix::fs::PermissionsExt;
+
+        // A directory this test makes read-only, rather than one borrowed
+        // from the system: `/usr/lib` and friends are under SIP and refuse
+        // writes with an error that is not `PermissionDenied` at all, which
+        // classifies as `Other` and would have made this test a no-op.
+        let dir = std::env::temp_dir().join(format!("noob-refuse-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+
+        let target = dir.join("x.component");
+        // Both taken while the directory is still refusing, because both read
+        // it: `locked` classifies the path itself, which is the behaviour
+        // under test.
+        let got = crate::elevate::classify(&target);
+        let msg = locked(
+            &target,
+            &std::io::Error::from(std::io::ErrorKind::PermissionDenied),
+        );
+        // Put back before asserting, so a failure does not leave an
+        // unremovable directory behind.
+        let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755));
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert_eq!(
+            got,
+            crate::elevate::Denial::Directory,
+            "the fixture directory was writable, so this proves nothing"
+        );
+        assert!(
+            msg.contains(crate::gui::ELEVATABLE),
+            "a refused directory was not marked, so the window cannot offer administrator: {msg}"
+        );
+        // And it is not on the first line, which is the only part the window's
+        // footer keeps --- the reason the marker has to be carried separately.
+        assert!(
+            !msg.lines().next().unwrap().contains(crate::gui::ELEVATABLE),
+            "the marker moved to the first line; `gui::install_these` assumes it is not"
+        );
     }
 
     /// **The binary has to come out executable.**

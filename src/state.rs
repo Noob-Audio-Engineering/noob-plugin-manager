@@ -23,9 +23,46 @@ pub struct Record {
     pub version: String,
     pub commit: String,
     pub installed: String,
+    /// Which platform's build this is --- **not** which platform it was
+    /// installed on, though for a correct install they are the same thing.
+    ///
+    /// The commit alone cannot answer "is this up to date": every platform
+    /// builds the same commit, so a Windows build and a macOS build of one
+    /// commit record the same hash. That was harmless while only one platform
+    /// was ever selected, and became the thing that made the fix invisible ---
+    /// a machine carrying the wrongly-installed Windows bundles reported them
+    /// *up to date* against the macOS manifest, and the corrected installer
+    /// skipped every one of them.
+    ///
+    /// `None` is a record written before this field existed, which is exactly
+    /// the population that has the wrong build on disk. It is treated as "not
+    /// this platform" rather than as "unknown", so those installs are replaced
+    /// rather than trusted.
+    #[serde(default)]
+    pub platform: Option<String>,
     /// Every path this program created, so an uninstall removes exactly what
     /// an install added and nothing near it.
     pub paths: Vec<PathBuf>,
+}
+
+impl Record {
+    /// Whether this record describes a build of `commit` for the platform now
+    /// running --- which is what "up to date" has to mean.
+    pub fn is_current(&self, commit: &str) -> bool {
+        self.commit == commit && self.platform.as_deref() == Some(crate::registry::PLATFORM)
+    }
+
+    /// What to say about a record that is not current, which is a different
+    /// sentence when the build on disk is the wrong platform's entirely.
+    pub fn why_not_current(&self) -> &'static str {
+        match self.platform.as_deref() {
+            Some(p) if p == crate::registry::PLATFORM => "behind",
+            // Either a record from before this field existed --- the broken
+            // installer's --- or one genuinely written on another platform.
+            // Both mean the bundle on disk cannot be loaded here.
+            _ => "the wrong platform's build",
+        }
+    }
 }
 
 /// The whole record, keyed by plug-in id.
@@ -67,6 +104,22 @@ fn state_file() -> Option<PathBuf> {
         "noob-plugin-manager",
     )?;
     Some(dirs.data_local_dir().join("installed.json"))
+}
+
+/// Every kind of part this machine can host, in the order a reader wants to
+/// see them.
+///
+/// One list, so that anything enumerating the install directories --- `noob
+/// where`, the window's settings panel, the writability check --- shows the
+/// same set. They used to hard-code `["vst3", "clap"]` each in their own
+/// place, which on macOS meant the `Components` directory the installer
+/// writes Audio Units into was never named anywhere a user could see it.
+pub const KINDS: &[&str] = &["vst3", "clap", "au"];
+
+/// The kinds this machine can actually host, which is `KINDS` minus whatever
+/// this platform has nowhere to put.
+pub fn kinds_here() -> Vec<&'static str> {
+    KINDS.iter().copied().filter(|k| belongs_here(k)).collect()
 }
 
 /// Whether this machine can host a part of the given kind at all.
@@ -190,12 +243,74 @@ pub fn shared_writable() -> bool {
     let Ok(root) = plugin_root() else {
         return false;
     };
-    ["VST3", "CLAP"].iter().all(|l| writable(&root.join(l)))
+    // Every directory this platform installs into, not a fixed two: on macOS
+    // an Audio Unit goes to `Components`, and a check that never looked at it
+    // could report the shared folders writable while the one an AU needs was
+    // not.
+    kinds_here()
+        .iter()
+        .filter_map(|k| install_dir(k).ok())
+        .filter_map(|p| p.file_name().map(|n| root.join(n)))
+        .all(|d| writable(&d))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn record(platform: Option<&str>, commit: &str) -> Record {
+        Record {
+            version: "0.1.0".into(),
+            commit: commit.into(),
+            platform: platform.map(str::to_string),
+            installed: "0".into(),
+            paths: vec![],
+        }
+    }
+
+    /// **A record from before this field existed is never up to date.**
+    ///
+    /// That population is precisely the machines the platform bug wrote to:
+    /// they hold the Windows build, and their record says only which *commit*
+    /// it was --- which the macOS manifest for the same commit matches
+    /// exactly. Read on the commit alone, every one of them reported "up to
+    /// date" the moment the installer was fixed, and the fix reached none of
+    /// them.
+    #[test]
+    fn a_record_without_a_platform_is_not_current() {
+        let r = record(None, "abc123");
+        assert!(
+            !r.is_current("abc123"),
+            "a record that does not say which build it holds was trusted"
+        );
+        assert_eq!(r.why_not_current(), "the wrong platform's build");
+    }
+
+    /// The same commit built for another platform is not this machine's build,
+    /// however current the hash looks.
+    #[test]
+    fn another_platforms_build_of_this_commit_is_not_current() {
+        let other = if cfg!(target_os = "macos") {
+            "windows-x86_64"
+        } else {
+            "macos-universal"
+        };
+        let r = record(Some(other), "abc123");
+        assert!(
+            !r.is_current("abc123"),
+            "{other} was accepted as this platform's build"
+        );
+    }
+
+    /// And the ordinary cases still read the way they always did: this
+    /// platform at this commit is current, and at an older one is behind.
+    #[test]
+    fn this_platforms_build_is_current_at_this_commit_and_behind_at_another() {
+        let r = record(Some(crate::registry::PLATFORM), "abc123");
+        assert!(r.is_current("abc123"), "the right build was called stale");
+        assert!(!r.is_current("def456"));
+        assert_eq!(r.why_not_current(), "behind");
+    }
 
     /// **A part this machine cannot host is skipped, not refused.**
     ///

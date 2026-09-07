@@ -16,9 +16,37 @@ use serde::Deserialize;
 /// The organisation whose repositories are searched.
 pub const ORG: &str = "Noob-Audio-Engineering";
 
-/// The platform this build installs. One value today; the manifest carries it
-/// so that a second one does not need a new field.
-pub const PLATFORM: &str = "windows-x86_64";
+/// The platform this build installs, which is the platform it was *compiled
+/// for* --- not a constant anybody edits.
+///
+/// **This was `"windows-x86_64"` on every platform.** The manifests were
+/// already published per platform and everything downstream of here already
+/// knew about macOS: `state.rs` picks `/Library/Audio/Plug-Ins`, `install.rs`
+/// restores the executable bit, `belongs_here` admits an Audio Unit. All of
+/// it was reached with the Windows build in hand, because this line chose
+/// which manifest to read before any of that ran.
+///
+/// What it did on a Mac was install: the zip unpacked, the checksum matched,
+/// the `.vst3` directory appeared in the right place, and inside it was
+/// `Contents/x86_64-win/` --- a Windows DLL in a bundle macOS will never load.
+/// The Audio Unit was not installed at all, because a Windows build has none
+/// to install. Six plug-ins, "installed", invisible in every host, with
+/// nothing anywhere reporting a failure.
+///
+/// The labels are the release workflow's matrix labels, which is what the
+/// manifest's `platform` field and the asset names are built from. macOS ships
+/// one universal build for both architectures, so both map to the same label.
+pub const PLATFORM: &str = if cfg!(target_os = "windows") {
+    "windows-x86_64"
+} else if cfg!(target_os = "macos") {
+    "macos-universal"
+} else {
+    // No builds are published for anything else. Naming the platform rather
+    // than defaulting to one keeps the failure honest: nothing matches, the
+    // manager says it found no plug-ins, and it does not install a foreign
+    // build to a machine that cannot run it.
+    std::env::consts::OS
+};
 
 /// What a plug-in's pipeline publishes beside its zip.
 ///
@@ -69,11 +97,12 @@ pub struct Display {
 /// One installable part of a bundle, and which directory it belongs in.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Install {
-    /// `vst3` or `clap`, for reporting.
+    /// `vst3`, `clap` or `au`, for reporting.
     pub kind: String,
     /// The path inside the zip.
     pub path: String,
-    /// Which install directory it goes into: `vst3` or `clap`.
+    /// Which install directory it goes into: `vst3`, `clap` or `au`. A macOS
+    /// build carries all three; a Windows one carries the first two.
     pub into: String,
 }
 
@@ -224,4 +253,75 @@ fn get_json<T: serde::de::DeserializeOwned>(agent: &ureq::Agent, url: &str) -> R
 /// A token, from the environment or the settings. Never required.
 fn token() -> Option<String> {
     crate::settings::Settings::load().effective_token()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// **The platform this installs for is the platform it runs on.**
+    ///
+    /// This is the test that was missing. `PLATFORM` was the literal
+    /// `"windows-x86_64"`, so a macOS build of this program asked every
+    /// repository for the Windows manifest, downloaded the Windows zip, and
+    /// installed a `.vst3` directory whose only content was
+    /// `Contents/x86_64-win/` --- a DLL, in a bundle macOS cannot load. The
+    /// Audio Unit never arrived either, because the Windows build has none.
+    ///
+    /// Nothing reported a failure: the checksum matched, the archive unpacked,
+    /// the directory landed where it belonged. It was correct in every respect
+    /// except which platform's build it was.
+    #[test]
+    fn the_platform_installed_is_the_platform_running() {
+        let want = if cfg!(target_os = "windows") {
+            "windows-x86_64"
+        } else if cfg!(target_os = "macos") {
+            "macos-universal"
+        } else {
+            std::env::consts::OS
+        };
+        assert_eq!(
+            PLATFORM,
+            want,
+            "this build installs {PLATFORM} builds on {}, which is somebody else's plug-in",
+            std::env::consts::OS
+        );
+    }
+
+    /// **On a Mac, the Windows build is never the one selected.** Stated as
+    /// its own test because it is the exact sentence that was false, and
+    /// because it fails loudly on the machine the bug was reported from.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_mac_never_selects_the_windows_build() {
+        assert_ne!(
+            PLATFORM, "windows-x86_64",
+            "a Mac is asking for the Windows build again"
+        );
+        assert_eq!(PLATFORM, "macos-universal");
+    }
+
+    /// The asset name this searches for is the one the pipeline publishes:
+    /// `<crate>-<label>.json`. Both platforms' manifests sit in the same
+    /// release, so the suffix has to tell them apart --- and it is the
+    /// separator that makes it able to.
+    #[test]
+    fn the_asset_searched_for_is_this_platforms_and_not_the_other() {
+        let want = format!("-{PLATFORM}.json");
+        assert!(
+            format!("noob-q{want}").ends_with(&want),
+            "the suffix must match this platform's real asset name"
+        );
+        // The other platform's manifest is published beside it, under the
+        // same prefix, and must not be picked up.
+        let other = if cfg!(target_os = "macos") {
+            "noob-q-windows-x86_64.json"
+        } else {
+            "noob-q-macos-universal.json"
+        };
+        assert!(
+            !other.ends_with(&want),
+            "{other} matches the suffix `{want}` this platform searches for"
+        );
+    }
 }

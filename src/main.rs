@@ -38,6 +38,9 @@ fn main() {
         "list" | "status" => cmd_list(),
         "install" => cmd_install(rest, false),
         "update" | "upgrade" => cmd_install(rest, true),
+        // Not in the help: this is how the elevated copy talks back to the
+        // one that raised it. See `cmd_install`'s `Emit`.
+        "install-elevated" => cmd_install(rest, false),
         "uninstall" | "remove" => cmd_uninstall(rest),
         "where" => cmd_where(),
         // Used by `tools/page-check.mjs`, so the interface can be drawn
@@ -79,15 +82,33 @@ pub fn agent() -> ureq::Agent {
 enum Status {
     Missing,
     Current,
-    Behind(String),
+    /// The installed version, and why it is not the current one --- which is
+    /// usually "behind", is sometimes "this is another platform's build", and
+    /// is sometimes a part that never made it onto disk.
+    Behind(String, String),
     /// On disk, but this program did not put it there, so its build is unknown.
     Unknown,
 }
 
 fn status_of(m: &Manifest, st: &State) -> Status {
     match st.installed.get(&m.id) {
-        Some(r) if r.commit == m.commit => Status::Current,
-        Some(r) => Status::Behind(r.version.clone()),
+        // The commit *and* the platform. The commit alone called a wrongly
+        // installed Windows bundle up to date, because both platforms build
+        // the same commit --- so the corrected installer skipped exactly the
+        // machines that needed it.
+        Some(r) if r.is_current(&m.commit) => {
+            // The record says the right commit for the right platform. Whether
+            // every part of it actually reached the disk is a separate
+            // question, and only the disk can answer it.
+            match install::missing_parts(m).as_slice() {
+                [] => Status::Current,
+                missing => Status::Behind(
+                    r.version.clone(),
+                    format!("missing its {}", missing.join(" and ")),
+                ),
+            }
+        }
+        Some(r) => Status::Behind(r.version.clone(), r.why_not_current().to_string()),
         None => {
             let any = install::targets(m).iter().any(|(_, p)| p.exists());
             if any {
@@ -125,7 +146,7 @@ fn cmd_list() -> i32 {
     for m in &found {
         let here = match status_of(m, &st) {
             Status::Current => "up to date".to_string(),
-            Status::Behind(v) => format!("{v} installed --- behind"),
+            Status::Behind(v, why) => format!("{v} installed --- {why}"),
             Status::Missing => "not installed".to_string(),
             Status::Unknown => "installed, build unknown".to_string(),
         };
@@ -147,7 +168,46 @@ fn cmd_list() -> i32 {
     0
 }
 
+/// **How an elevated install gets its result back to the user.**
+///
+/// `osascript ... with administrator privileges` starts a *second process* as
+/// root; there is no way to raise the rights of one already running. That
+/// process then computes where the install record lives, and `directories`
+/// resolves that against `$HOME` --- so the elevated copy either writes the
+/// record into root's home, where the user's manager never looks, or writes
+/// the user's file *as root*, after which every later unelevated save is
+/// refused. The window said "the elevated copy writes the same record"; it
+/// could not, whichever way `$HOME` went.
+///
+/// So the elevated copy writes no record at all. It prints what it installed
+/// as JSON on stdout, which `do shell script` hands back as its result, and
+/// the process that asked --- still running as the user --- merges it in and
+/// saves. Everything human goes to stderr so the JSON is alone on stdout.
+struct Emit(bool);
+
+impl Emit {
+    /// Progress, to wherever it belongs: stderr when stdout is carrying the
+    /// record, stdout otherwise.
+    fn say(&self, line: &str) {
+        if self.0 {
+            eprint!("{line}");
+            let _ = std::io::Write::flush(&mut std::io::stderr());
+        } else {
+            print!("{line}");
+            let _ = std::io::Write::flush(&mut std::io::stdout());
+        }
+    }
+}
+
 fn cmd_install(rest: &[String], only_behind: bool) -> i32 {
+    // The flag is stripped before the plug-in name is read, so
+    // `install-elevated all --emit-record` and `install all` parse alike.
+    let emit = Emit(rest.iter().any(|a| a == "--emit-record"));
+    let rest: Vec<String> = rest
+        .iter()
+        .filter(|a| !a.starts_with("--"))
+        .cloned()
+        .collect();
     let want = rest.first().map(String::as_str).unwrap_or("all");
     let ag = agent();
     let (found, problems) = registry::discover(&ag);
@@ -181,32 +241,54 @@ fn cmd_install(rest: &[String], only_behind: bool) -> i32 {
             skipped += 1;
             continue;
         }
-        print!("{} {} ({}) ... ", m.id, m.version, m.short_commit());
-        use std::io::Write;
-        let _ = std::io::stdout().flush();
+        emit.say(&format!(
+            "{} {} ({}) ... ",
+            m.id,
+            m.version,
+            m.short_commit()
+        ));
 
         match install::install(&ag, m) {
             Ok(record) => {
-                println!("installed");
+                emit.say("installed\n");
                 st.installed.insert(m.id.clone(), record);
                 done += 1;
             }
-            Err(e) => {
-                println!("failed");
-                eprintln!("  {e}");
+            Err(f) => {
+                emit.say("failed\n");
+                eprintln!("  {}", f.error);
+                // Whatever landed before the failure is recorded, or it is a
+                // bundle in the plug-in folder that this program put there and
+                // then denied all knowledge of --- and `uninstall` will not
+                // remove what it has no record of.
+                if let Some(partial) = f.partial {
+                    for p in &partial.paths {
+                        eprintln!("  left in place: {}", p.display());
+                    }
+                    eprintln!("  Recorded, so `noob uninstall {}` will remove them.", m.id);
+                    st.installed.insert(m.id.clone(), partial);
+                }
                 failed += 1;
             }
         }
     }
 
-    if let Err(e) = st.save() {
+    if emit.0 {
+        // Root must not write the record --- see `Emit`. It is handed back on
+        // stdout instead, and the process that asked for administrator saves
+        // it under its own account.
+        match serde_json::to_string(&st.installed) {
+            Ok(json) => println!("{json}"),
+            Err(e) => eprintln!("note: the install record could not be encoded: {e}"),
+        }
+    } else if let Err(e) = st.save() {
         eprintln!("note: the install record could not be written: {e}");
     }
 
     if skipped > 0 {
-        println!("{skipped} already up to date.");
+        emit.say(&format!("{skipped} already up to date.\n"));
     }
-    println!("{done} installed, {failed} failed.");
+    emit.say(&format!("{done} installed, {failed} failed.\n"));
     // A partial success is a failure to whatever is scripting this.
     if failed > 0 { 1 } else { 0 }
 }
@@ -242,7 +324,10 @@ fn cmd_uninstall(rest: &[String]) -> i32 {
 }
 
 fn cmd_where() -> i32 {
-    for into in ["vst3", "clap"] {
+    // Every kind this machine hosts, so macOS names `Components` too. A
+    // `where` that omits the directory an Audio Unit is installed into is a
+    // report of where things go that leaves one of them out.
+    for into in state::kinds_here() {
         match state::install_dir(into) {
             Ok(p) => println!("{into:<5} {}", p.display()),
             Err(e) => println!("{into:<5} {e}"),

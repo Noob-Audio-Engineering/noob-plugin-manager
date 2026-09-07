@@ -1,0 +1,44 @@
+{
+  "schema": 1,
+  "id": "noob-resonator",
+  "version": "0.1.0",
+  "commit": "13f751718d2c9013c8c2ca3a17f1d9afe59c5915",
+  "built": "2026-09-07T01:02:55Z",
+  "platform": "macos-universal",
+  "asset": "noob-resonator-macos-universal.zip",
+  "sha256": "0b06adbced6c1b491418c99164be682cb3e247b95dba189fa973dcb56f602bc9",
+  "url": "https://github.com/Noob-Audio-Engineering/noob-resonator/releases/download/latest/noob-resonator-macos-universal.zip",
+  "installs": [
+    {
+      "kind": "vst3",
+      "path": "noob-resonator.vst3",
+      "into": "vst3"
+    },
+    {
+      "kind": "clap",
+      "path": "noob-resonator.clap",
+      "into": "clap"
+    },
+    {
+      "kind": "au",
+      "path": "noob-resonator.component",
+      "into": "au"
+    }
+  ],
+  "display": {
+    "kind": "effect",
+    "au_subtype": "Res1",
+    "name": "Noob Resonator",
+    "accent": "#4fd6c8",
+    "tagline": "A modal and waveguide resonator whose mode budget is spent by contribution rather than by frequency.",
+    "features": [
+      "Ten objects: beams, bars, strings, tines, membranes, plates and air columns",
+      "Which modes you keep, not how many: 68 dB between the best and worst ordering at one cost",
+      "Six voices per object, so a chord of beams or a chord of pipes",
+      "Play chords into it over MIDI, with six memory slots",
+      "Every partial editable by hand, or drawn across in one stroke",
+      "33 presets in seven pairs, each pair one control apart"
+    ]
+  },
+  "banner": "https://github.com/Noob-Audio-Engineering/noob-resonator/releases/download/latest/noob-resonator-banner.png"
+}

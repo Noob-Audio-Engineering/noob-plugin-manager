@@ -51,10 +51,11 @@ publishes it to a rolling `latest` release, with a manifest beside it:
 
 ```json
 { "schema": 1, "id": "noob-resonator", "version": "0.1.0",
-  "commit": "…", "built": "…", "platform": "windows-x86_64",
+  "commit": "…", "built": "…", "platform": "macos-universal",
   "sha256": "…", "url": "…",
   "installs": [ { "kind": "vst3", "path": "noob-resonator.vst3", "into": "vst3" },
-                { "kind": "clap", "path": "noob-resonator.clap", "into": "clap" } ],
+                { "kind": "clap", "path": "noob-resonator.clap", "into": "clap" },
+                { "kind": "au",   "path": "noob-resonator.component", "into": "au" } ],
   "display": { "name": "Noob Resonator", "kind": "effect", "accent": "#4fd6c8",
                "tagline": "…", "features": ["…"] },
   "banner": "…/noob-resonator-banner.png" }
@@ -62,6 +63,15 @@ publishes it to a rolling `latest` release, with a manifest beside it:
 
 That file is the contract. This program reads it to decide whether it needs the
 download at all, and to know where each part belongs.
+
+**One manifest per platform, and the one this build reads is the one it was
+compiled for.** Every release carries both --- `…-windows-x86_64.json` and
+`…-macos-universal.json` --- and the macOS build additionally carries an Audio
+Unit, which is a macOS format and has nowhere to go on Windows. The platform
+was once a literal in the source rather than a property of the build, which
+meant a Mac fetched the Windows manifest, installed the Windows DLL into a
+`.vst3` directory, and installed no Audio Unit at all: correct in every respect
+except which platform's build it was, and silent about all of it.
 
 `display` and `banner` are how a plug-in presents itself, and both come from
 the plug-in: `display` out of `[package.metadata.noob]` in its own crate
@@ -74,15 +84,26 @@ Both are optional. A build published before they existed, or a crate that has
 not filled them in, simply shows less --- which is not the same as being
 broken, and is not treated as though it were.
 
-| | VST3 | CLAP |
-|---|---|---|
-| Windows | `%CommonProgramFiles%\VST3` | `%CommonProgramFiles%\CLAP` |
-| macOS | `~/Library/Audio/Plug-Ins/VST3` | `~/Library/Audio/Plug-Ins/CLAP` |
+| | VST3 | CLAP | Audio Unit |
+|---|---|---|---|
+| Windows | `%CommonProgramFiles%\VST3` | `%CommonProgramFiles%\CLAP` | — |
+| macOS | `/Library/Audio/Plug-Ins/VST3` | `/Library/Audio/Plug-Ins/CLAP` | `/Library/Audio/Plug-Ins/Components` |
 
-macOS uses **your** plug-in folder rather than `/Library`, deliberately: every
-host scans both, it needs no administrator, and an installer that asks for a
-password to put a free plug-in on your own machine is asking for more than it
-needs.
+An Audio Unit lives in `Components` rather than in a folder named after the
+format: that directory is older than the habit of naming one after the plug-in
+standard, and every macOS host looks there.
+
+macOS installs machine-wide and asks for a password when it cannot write. It
+used to use your own `~/Library` to avoid ever asking, which is tidy right up
+until the plug-in does not appear --- a second account, a host launched by
+something else, or simply a machine where everything else lives in `/Library`
+and this one thing does not. Your own folder is still the fallback, and
+**Install into my own folders** in the settings chooses it outright for anyone
+who would rather not be asked.
+
+There is no silent detour between the two. If the shared folder refuses, the
+install fails with the path in the message and offers administrator, rather
+than reporting success and putting the plug-in somewhere nobody chose.
 
 ## What it refuses to do
 
@@ -101,7 +122,15 @@ folder is wrong in the direction that makes people install it twice.
 in a host is held open, so an install can fail partway through. Everything is
 staged beside the target and moved in only once all of it has arrived, and a
 lock is reported as what it is: close the project, or the host, and run it
-again.
+again. Administrator is offered only for a *directory* that refuses writes,
+which is the one case it fixes --- never for a file a host is holding, where
+the prompt would fail anyway and teach you to click through the next one.
+
+**It will not lose track of a part-finished install.** The three formats are
+installed one at a time, so a refusal on the third leaves the first two in
+place. Those are recorded and named, so `uninstall` can undo them --- rather
+than left in the plug-in folder as bundles this program put there and then
+denied all knowledge of.
 
 ## Building it
 
