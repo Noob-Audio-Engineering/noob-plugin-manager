@@ -283,5 +283,4 @@ mod tests {
             "the shared and user roots are the same path, so asking for a              password could never change where anything goes"
         );
     }
-
 }
